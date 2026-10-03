@@ -458,9 +458,26 @@ def test_skipped_tests_are_still_collected(project: Project) -> None:
     assert project.checks() == []
 
 
-class TestNoseStyleHooks:
-    """`setup`/`teardown` stopped being called in pytest 8.0, silently."""
+#: pytest 7 still calls the nose-style aliases, so the check is switched off
+#: there and the tests that expect a finding have to be too. Compared as an
+#: integer: `"10" < "8"` is true as strings, which would switch the check off
+#: again at pytest 10.
+NOSE_ALIASES_GONE = int(pytest.__version__.split(".")[0]) >= 8
 
+needs_pytest_8 = pytest.mark.skipif(
+    not NOSE_ALIASES_GONE, reason="pytest 7 still calls the nose-style aliases"
+)
+
+
+class TestNoseStyleHooks:
+    """`setup`/`teardown` stopped being called in pytest 8.0, silently.
+
+    The tests that expect *no* finding are deliberately not version-gated: they
+    must hold on both majors, and on pytest 7 they pass because the whole check
+    is switched off.
+    """
+
+    @needs_pytest_8
     def test_an_uncalled_class_setup_is_reported(self, project: Project) -> None:
         project.write(
             "tests/test_hook.py",
@@ -474,14 +491,13 @@ class TestNoseStyleHooks:
             """,
         )
         code, payload = project.findings()
-        if pytest.__version__.split(".")[0] < "8":  # pragma: no cover
-            pytest.skip("pytest 7 still calls these")
         assert code == 1
         (finding,) = payload["findings"]
         assert finding["check"] == "uncalled-hook"
         assert finding["location"] == "tests/test_hook.py:2"
         assert "setup_method" in finding["message"]
 
+    @needs_pytest_8
     def test_a_module_level_setup_is_reported(self, project: Project) -> None:
         project.write(
             "tests/test_modhook.py",
