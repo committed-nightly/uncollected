@@ -1,0 +1,141 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -e ".[dev]"
+
+      - run: python -m pytest --version
+      - run: python -m pytest
+
+      # logbook#36: pyflakes rules only. F811 is a definition that never runs,
+      # which is the subject of this repository.
+      - run: ruff check .
+
+  pytest-7:
+    # The `uncalled-hook` check is version-gated: pytest 7 still calls the
+    # nose-style aliases, so reporting them there would be wrong. Nothing else
+    # pins the boundary, so it is pinned here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . "pytest>=7,<8"
+      - run: python -m pytest --version
+      - run: python -m pytest tests
+
+  dogfood:
+    # Run it on real repositories. A tool that has only ever been run by its
+    # own test suite is a tool nobody has run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+
+      - name: on itself, which should be clean
+        run: uncollected .
+
+      - name: on a project with one of each finding
+        # Builds the mistakes the tool exists for and checks that every check
+        # still fires. A tool that silently stopped finding anything would
+        # otherwise pass this job.
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          # `legacy` is deliberately not in testpaths: naming a directory there
+          # makes pytest collect it despite norecursedirs, so the check would
+          # correctly not fire.
+          printf '[pytest]\nnorecursedirs = legacy\ntestpaths = tests\n' > pytest.ini
+
+          mkdir -p tests legacy outside
+          cat > tests/test_dup.py <<'PY'
+          def test_alpha():
+              assert False
+
+          def test_alpha():
+              assert True
+
+          class Helpers:
+              def test_in_a_plain_class(self):
+                  assert True
+
+          class TestThing:
+              def setup(self):
+                  self.v = 1
+
+              def test_thing(self):
+                  assert True
+          PY
+          cat > tests/checks.py <<'PY'
+          def test_never_imported():
+              assert False
+          PY
+          cat > legacy/test_old.py <<'PY'
+          def test_old():
+              assert True
+          PY
+          cat > outside/test_far.py <<'PY'
+          def test_far():
+              assert True
+          PY
+
+          uncollected . --json > findings.json || true
+          python - <<'PY'
+          import json
+
+          found = {f["check"] for f in json.load(open("findings.json"))["findings"]}
+          expected = {
+              "shadowed",
+              "not-a-test-file",
+              "unrecursed-dir",
+              "outside-testpaths",
+              "not-a-test-class",
+              "uncalled-hook",
+          }
+          missing = expected - found
+          assert not missing, f"checks stopped firing: {sorted(missing)}"
+          assert "unexplained" not in found, "something went unexplained"
+          print(f"all {len(expected)} checks fired")
+          PY
+
+      - name: on a clean project, which must exit 0
+        run: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          printf '[pytest]\n' > pytest.ini
+          mkdir -p tests
+          printf 'def test_a():\n    assert True\n' > tests/test_a.py
+          uncollected .
+
+      - name: on a real third-party suite
+        # requests collects cleanly and has no findings, so this catches the
+        # other direction: a change that starts reporting things that are fine.
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 https://github.com/psf/requests /tmp/requests
+          pip install -e /tmp/requests
+          uncollected /tmp/requests
