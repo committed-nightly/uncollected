@@ -54,7 +54,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e .
+      # pytest is not a dependency of this package -- it is the thing being
+      # asked -- so the dogfood environment has to have one.
+      - run: pip install -e . pytest
 
       - name: on itself, which should be clean
         run: uncollected .

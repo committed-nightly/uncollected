@@ -170,4 +170,13 @@ def _explain(command: list[str], completed: subprocess.CompletedProcess, headlin
     tail = (completed.stdout or "") + (completed.stderr or "")
     lines = [line for line in tail.splitlines() if line.strip()][-15:]
     rendered = "\n".join(f"    {line}" for line in lines) or "    (no output)"
-    return f"{headline}\n  ran: {' '.join(command)} --collect-only\n{rendered}"
+    message = f"{headline}\n  ran: {' '.join(command)} --collect-only\n{rendered}"
+
+    # The first thing anybody hits: pytest is not a dependency of this package,
+    # because the whole point is to ask the project's own pytest.
+    if "No module named pytest" in tail:
+        message += (
+            "\n  there is no pytest in that interpreter. Install one, or point "
+            "--pytest at the project's own virtualenv."
+        )
+    return message

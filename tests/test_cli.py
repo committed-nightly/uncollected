@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -122,3 +123,18 @@ class TestOutput:
         assert payload["ini"]["python_files"] == ["test_*.py", "*_test.py"]
         assert payload["findings"][0]["check"] == "shadowed"
         assert set(payload) >= {"collected", "candidates", "findings", "rootdir", "unreadable"}
+
+
+class TestMissingPytest:
+    def test_an_interpreter_without_pytest_says_so_plainly(self, project: Project) -> None:
+        """The first thing a new user hits, since pytest is not a dependency."""
+        project.write("tests/test_a.py", "def test_a():\n    assert True\n")
+        # `-S` skips site-packages, so this interpreter cannot import pytest
+        # whatever is installed. Deterministic where naming a system python
+        # would depend on the machine.
+        code, _, err = run_cli(
+            str(project.root), "--pytest", f"{sys.executable} -S -m pytest"
+        )
+        assert code == 2
+        assert "no pytest in that interpreter" in err
+        assert "--pytest" in err
