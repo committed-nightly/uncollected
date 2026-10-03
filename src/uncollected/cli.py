@@ -74,6 +74,26 @@ def _enabled(only: list[str], skip: list[str]) -> set[str]:
     return enabled - set(skip)
 
 
+def _resolve_pytest(spec: str | None) -> list[str] | None:
+    """Make a relative `--pytest` path mean what the person typing it meant.
+
+    pytest is run with the project as its working directory, so a bare
+    `.venv/bin/python` would be looked for inside the project rather than next
+    to the shell you are standing in. Anchoring it here costs nothing and
+    removes a confusing "No such file or directory" for a path that is plainly
+    right there.
+    """
+    if spec is None:
+        return None
+    command = shlex.split(spec)
+    if not command:
+        raise BadUsage("uncollected: --pytest was given nothing to run")
+    head = Path(command[0])
+    if len(head.parts) > 1 and not head.is_absolute() and head.exists():
+        command[0] = str(head.resolve())
+    return command
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -84,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         enabled = _enabled(args.only, args.skip)
+        command = _resolve_pytest(args.pytest)
     except BadUsage as exc:
         print(exc, file=sys.stderr)
         return EXIT_ERROR
@@ -93,7 +114,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"uncollected: not a directory: {args.path}", file=sys.stderr)
         return EXIT_ERROR
 
-    command = shlex.split(args.pytest) if args.pytest else None
     try:
         session = probe(path, command)
     except PytestFailed as exc:

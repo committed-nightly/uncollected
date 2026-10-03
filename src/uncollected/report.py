@@ -11,9 +11,11 @@ from .session import Session
 
 def _headline(session: Session, candidates: int) -> str:
     where = session.configfile or "no config file"
+    # The two numbers are not comparable and are not meant to be: parametrising
+    # one definition makes many tests, so `collected` is routinely the larger.
     return (
         f"pytest {session.pytest_version}, rootdir {session.rootdir}, {where}: "
-        f"{len(session.items)} test(s) collected from {candidates} that look like tests"
+        f"{candidates} definition(s) look like tests, {len(session.items)} test(s) collected"
     )
 
 
