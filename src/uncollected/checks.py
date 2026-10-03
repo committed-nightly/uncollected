@@ -114,18 +114,23 @@ def _file_reason(relpath: str, session: Session, root: Path) -> tuple[str, str] 
 def _uncollected(modules: list[Module], session: Session, root: Path) -> list[Finding]:
     collected = session.collected_keys
     findings: list[Finding] = []
+    # Unioned across the project, because the subclass of a shared test base is
+    # routinely in another file from the base itself.
+    base_names = set().union(*(m.base_names for m in modules)) if modules else set()
 
     for module in modules:
         file_reason = _file_reason(module.file, session, root)
 
         for candidate in module.candidates:
-            if (candidate.file, candidate.qualname) in collected:
-                continue
             if _opted_out(candidate.class_path, module):
                 continue
             if _pytest_already_warned(candidate.class_path, module, session):
                 continue
 
+            # Shadowing is checked before asking whether pytest collected this
+            # qualname, because the definition that replaced it has the *same*
+            # qualname. Asking first is how a shadowed test hides: pytest did
+            # collect `test_alpha`, just not this one.
             if candidate.shadowed_by is not None:
                 findings.append(
                     Finding(
@@ -138,6 +143,17 @@ def _uncollected(modules: list[Module], session: Session, root: Path) -> list[Fi
                         ),
                     )
                 )
+                continue
+
+            if (candidate.file, candidate.qualname) in collected:
+                continue
+
+            # Before any reason is reached for, including the file-level ones: a
+            # test typed into a shared base class runs under every subclass, and
+            # the subclass may well be in a file that is collected while this one
+            # is not. The qualname never matches, so without this it looks like a
+            # finding under whichever reason happens to apply.
+            if _is_a_shared_base(candidate.class_path, base_names):
                 continue
 
             if file_reason is not None:
@@ -227,6 +243,17 @@ def _pytest_already_warned(
         if matches and info.has_init:
             return True
     return False
+
+
+def _is_a_shared_base(class_path: tuple[str, ...], base_names: set[str]) -> bool:
+    """Is an enclosing class somebody's base class?
+
+    `more-itertools` keeps a `PeekableMixinTests` and subclasses it twice;
+    `websockets` keeps a `CommonClientServerTests` and subclasses it per
+    transport. Neither matches `python_classes`, pytest ignores both classes,
+    and every test in them runs anyway under the subclass.
+    """
+    return any(name in base_names for name in class_path)
 
 
 def _class_reason(class_path: tuple[str, ...], session: Session) -> str | None:

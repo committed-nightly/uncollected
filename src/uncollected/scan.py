@@ -88,6 +88,9 @@ class Module:
     #: Names invoked explicitly somewhere in the file, as `self.setup()` or
     #: `setup()`. A hook the tests call themselves is not dead.
     called_names: set[str] = field(default_factory=set)
+    #: Every name this file uses as a base class. A class whose name turns up
+    #: here is somebody's mixin, and its tests run under the subclass.
+    base_names: set[str] = field(default_factory=set)
 
 
 class Unparseable(Exception):
@@ -168,6 +171,29 @@ def _functions(body: list[ast.stmt]) -> list[ast.FunctionDef | ast.AsyncFunction
     return [s for s in body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
+def _base_names(tree: ast.AST) -> set[str]:
+    """Every name used as a base class anywhere in the file.
+
+    This is what keeps the mixin pattern from being reported. A class like
+    ``class SharedTests:`` matches no `python_classes` pattern and pytest
+    ignores it -- but ``class TestThing(SharedTests, TestCase)`` inherits its
+    methods, and pytest collects them there. The tests run; only the class they
+    were typed into is not a test class.
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for base in node.bases:
+            if isinstance(base, ast.Subscript):
+                base = base.value
+            if isinstance(base, ast.Name):
+                names.add(base.id)
+            elif isinstance(base, ast.Attribute):
+                names.add(base.attr)
+    return names
+
+
 def scan_source(source: str, relpath: str, function_patterns: list[str]) -> Module:
     """Find the test-shaped functions in one file's source."""
     try:
@@ -175,7 +201,11 @@ def scan_source(source: str, relpath: str, function_patterns: list[str]) -> Modu
     except SyntaxError as exc:
         raise Unparseable(f"{relpath}: {exc}") from exc
 
-    module = Module(file=relpath, called_names=_called_names(tree))
+    module = Module(
+        file=relpath,
+        called_names=_called_names(tree),
+        base_names=_base_names(tree),
+    )
 
     def looks_like_a_test(name: str) -> bool:
         # The configured patterns decide what pytest collects, but a function
